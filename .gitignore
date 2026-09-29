@@ -53,3 +53,5 @@ win64
 /stamp*
 /build*
 /install
+
+samples/CSharp/

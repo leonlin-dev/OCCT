@@ -6,12 +6,12 @@
 > `20-self-maintained/03-products/02-od/vendor/occt-config.cmake`).
 
 This directory is a **git submodule** pointing at
-[`plasmayang/OCCT`](https://github.com/plasmayang/OCCT), branch
+[`leonlin-dev/OCCT`](https://github.com/leonlin-dev/OCCT), branch
 `develop` (pinned to the upstream `V7_8_1` tag — `bd2a789f15235755ce4d1a3b07379a2e062fdc2e`).
 
 The `-patched` suffix is intentionally NOT used here because OCCT fork
 contains **no mathstudio-specific patches** — it is a plain upstream fork
-kept under the `plasmayang/` org for consistency with
+kept under the `leonlin-dev/` org for consistency with
 `Catch2-2.11.3-patched/`. If you do apply mathstudio-specific patches to
 OCCT, please rename this directory to `OCCT-7.8.1-patched/` and update
 the references in `occt-config.cmake` + `.gitmodules`.
@@ -81,7 +81,7 @@ then links against those.
 ## Pinning strategy
 
 The submodule is pinned to:
-- URL: `https://github.com/plasmayang/OCCT.git`
+- URL: `https://github.com/leonlin-dev/OCCT.git`
 - Branch: `develop` (mathstud matrix-tracked; **NOT** a synced default
   branch from upstream)
 - Commit: `bd2a789f15235755ce4d1a3b07379a2e062fdc2e` (upstream V7_8_1)

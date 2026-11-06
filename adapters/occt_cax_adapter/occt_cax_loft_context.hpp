@@ -682,6 +682,76 @@ struct OcctCaxLoftContext {
             total *= FT(0.5) * hp;
             return (t1 >= t0) ? total : -total;
         }
+
+        // Neutral adaptive chord-height polyline (Pillar 3): deterministic
+        // midpoint-stack chord-height subdivision with depth cap 8 and a
+        // 256-sample ceiling — the same refinement contract as the OD
+        // host's VxCrvAproxPolyPar oracle, evaluated over this kernel's
+        // own curve evaluation so every four-pillar host shares one
+        // longitudinal-enrichment semantics.
+        static void approximate_curve_polyline(const CurvT& c, FT tol,
+                                               std::vector<loft::CurvePolylineSample<FT, Pt3T>>& out) {
+            out.clear();
+            const int p = c.degree;
+            const FT lo = c.native->FirstParameter();
+            const FT hi = c.native->LastParameter();
+            if (!(hi > lo)) {
+                std::array<Vec3T, 1> d0{};
+                eval_curve_ders(c, lo, 0, Span<Vec3T>(d0.data(), d0.size()));
+                out.push_back({d0[0], lo});
+                return;
+            }
+            const FT use_tol = (tol > FT(0)) ? tol : FT(1e-4);
+            auto eval_pt = [&](FT t, Pt3T& pnt) {
+                std::array<Vec3T, 1> d{};
+                eval_curve_ders(c, t, 0, Span<Vec3T>(d.data(), d.size()));
+                pnt = d[0];
+            };
+            if (p == 1) {
+                const std::size_t num_cp =
+                    c.knots.size() - static_cast<std::size_t>(p) - 1;
+                out.reserve(num_cp);
+                for (std::size_t i = 0; i < num_cp; ++i) {
+                    const FT t = c.knots[i + 1];
+                    Pt3T pnt{};
+                    eval_pt(t, pnt);
+                    out.push_back({pnt, t});
+                }
+                return;
+            }
+            auto dist_to_seg = [](const Pt3T& q, const Pt3T& a, const Pt3T& b) -> FT {
+                const Vec3T ab{{b[0] - a[0], b[1] - a[1], b[2] - a[2]}};
+                const FT L2 = Kernel::dot3(ab, ab);
+                if (L2 <= FT(1e-14)) {
+                    return Kernel::norm3(Kernel::diff3(q, a));
+                }
+                const FT s = (std::max)(FT(0), (std::min)(FT(1),
+                    Kernel::dot3(Kernel::diff3(q, a), ab) / L2));
+                const Vec3T pr{{a[0] + s * ab[0], a[1] + s * ab[1], a[2] + s * ab[2]}};
+                return Kernel::norm3(Kernel::diff3(q, pr));
+            };
+            struct Seg { FT ta, tb; Pt3T pa, pb; int depth; };
+            std::vector<Seg> stack;
+            Pt3T p_start{}, p_end{};
+            eval_pt(lo, p_start);
+            eval_pt(hi, p_end);
+            out.push_back({p_start, lo});
+            stack.push_back({lo, hi, p_start, p_end, 0});
+            while (!stack.empty() && out.size() < 256) {
+                const Seg s = stack.back();
+                stack.pop_back();
+                const FT tmid = FT(0.5) * (s.ta + s.tb);
+                Pt3T pmid{};
+                eval_pt(tmid, pmid);
+                const FT chord_ht = dist_to_seg(pmid, s.pa, s.pb);
+                if (chord_ht > use_tol && s.depth < 8) {
+                    stack.push_back({tmid, s.tb, pmid, s.pb, s.depth + 1});
+                    stack.push_back({s.ta, tmid, s.pa, pmid, s.depth + 1});
+                } else {
+                    out.push_back({s.pb, s.tb});
+                }
+            }
+        }
     };
 
     // -----------------------------------------------------------------------

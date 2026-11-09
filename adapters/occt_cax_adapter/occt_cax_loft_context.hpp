@@ -28,6 +28,7 @@
 #include <loft_adapter_curve_topology.hpp>
 #include <loft_adapter_curve_concat.hpp>
 #include <loft_adapter_curve_extremum.hpp>
+#include <loft_adapter_curve_plane_isect.hpp>
 #include <loft_adapter_guide_candidate_selection.hpp>
 #include <loft_adapter_unified_basis.hpp>
 
@@ -573,45 +574,19 @@ struct OcctCaxLoftContext {
         using Vec3T = std::array<FT, 3>;
         using CurvT = OcctCurve;
 
-        static void eval_curve_ders(const CurvT& c, FT t, int max_d,
-                                    Span<Vec3T> ders_out) {
-            assert(max_d >= 0);
-            assert(ders_out.size() >= static_cast<std::size_t>(max_d) + 1);
-            if (c.native.IsNull()) return;
-
-            const FT lo = c.native->FirstParameter();
-            const FT hi = c.native->LastParameter();
-            const FT tc = detail::clampd(t, lo, hi);
-
-            if (max_d == 0) {
-                gp_Pnt p;
-                c.native->D0(tc, p);
-                ders_out[0] = {{p.X(), p.Y(), p.Z()}};
-            } else if (max_d == 1) {
-                gp_Pnt p;
-                gp_Vec v1;
-                c.native->D1(tc, p, v1);
-                ders_out[0] = {{p.X(), p.Y(), p.Z()}};
-                ders_out[1] = {{v1.X(), v1.Y(), v1.Z()}};
-            } else if (max_d == 2) {
-                gp_Pnt p;
-                gp_Vec v1, v2;
-                c.native->D2(tc, p, v1, v2);
-                ders_out[0] = {{p.X(), p.Y(), p.Z()}};
-                ders_out[1] = {{v1.X(), v1.Y(), v1.Z()}};
-                ders_out[2] = {{v2.X(), v2.Y(), v2.Z()}};
-            } else {
-                gp_Pnt p;
-                gp_Vec v1, v2;
-                c.native->D2(tc, p, v1, v2);
-                ders_out[0] = {{p.X(), p.Y(), p.Z()}};
-                ders_out[1] = {{v1.X(), v1.Y(), v1.Z()}};
-                ders_out[2] = {{v2.X(), v2.Y(), v2.Z()}};
-                for (int d = 3; d <= max_d; ++d) {
-                    gp_Vec vd = c.native->DN(tc, d);
-                    ders_out[static_cast<std::size_t>(d)] = {{vd.X(), vd.Y(), vd.Z()}};
-                }
-            }
+        // Shared array evaluator (operator-sinking review, Step 3 parity
+        // hardening): every leg evaluates curve derivatives through one
+        // bit-identical body (the lab's historical de Boor + derivative
+        // identity + rational quotient rule) so downstream KKT assemblies
+        // cannot diverge at ULP level between contexts.
+        static void eval_curve_ders(const CurvT& c, FT t, int max_d, Span<Vec3T> ders_out) {
+            const std::vector<FT> kv = NurbsEngine::knots(c);
+            std::vector<std::array<double, 4>> cp(NurbsEngine::control_points_homo(c));
+            std::vector<std::array<double, 3>> d;
+            loft_adapter::proj_curve_ders(NurbsEngine::degree(c), kv, cp,
+                                          static_cast<double>(t), max_d, d);
+            for (int k = 0; k <= max_d; ++k)
+                ders_out[static_cast<std::size_t>(k)] = d[static_cast<std::size_t>(k)];
         }
 
         // Shared adapter-side projection body (operator-sinking review,
@@ -629,59 +604,22 @@ struct OcctCaxLoftContext {
                 has_hint ? static_cast<double>(t_hint) : 0.0, static_cast<double>(tol_use)));
         }
 
+        // Shared adapter-side intersection body (operator-sinking review,
+        // Task 1.2): the former prep-local grid + bisection algorithm.
         static bool intersect_curve_plane(const CurvT& c, const Pt3T& plane_q,
-                                          const Vec3T& plane_n, FT t_hint,
-                                          FT tol, FT& t_out) {
-            const FT lo = c.native->FirstParameter();
-            const FT hi = c.native->LastParameter();
-            auto f = [&](FT t) {
-                std::array<Vec3T, 1> d{};
-                eval_curve_ders(c, t, 0, Span<Vec3T>(d.data(), 1));
-                return Kernel::dot3(Kernel::diff3(d[0], plane_q), plane_n);
-            };
-
-            const int steps = 512;
-            const FT h = (hi - lo) / static_cast<FT>(steps);
-            FT best_t = lo;
-            bool found = false;
-            FT best_dist = FT(0);
-            FT fa = f(lo);
-            if (fa == FT(0)) { t_out = lo; return true; }
-            FT ta = lo;
-
-            for (int i = 0; i < steps; ++i) {
-                const FT tb = (i + 1 == steps) ? hi : lo + static_cast<FT>(i + 1) * h;
-                const FT fb = f(tb);
-                if (fa * fb < FT(0)) {
-                    FT a = ta, b = tb;
-                    const FT fa_sign = fa;
-                    for (int it = 0; it < 80 && (b - a) > tol; ++it) {
-                        const FT m = FT(0.5) * (a + b);
-                        const FT fm = f(m);
-                        if (fm == FT(0)) { a = m; b = m; break; }
-                        if (fa_sign * fm < FT(0)) b = m; else a = m;
-                    }
-                    const FT cand = FT(0.5) * (a + b);
-                    const FT dist = std::fabs(cand - detail::clampd(t_hint, lo, hi));
-                    if (!found || dist < best_dist) {
-                        found = true;
-                        best_t = cand;
-                        best_dist = dist;
-                    }
-                }
-                if (fb == FT(0)) {
-                    const FT dist = std::fabs(tb - detail::clampd(t_hint, lo, hi));
-                    if (!found || dist < best_dist) {
-                        found = true;
-                        best_t = tb;
-                        best_dist = dist;
-                    }
-                }
-                fa = fb;
-                ta = tb;
-            }
-            if (found) t_out = best_t;
-            return found;
+                                          const Vec3T& plane_n, FT t_hint, FT tol,
+                                          FT& t_out) {
+            const std::vector<FT> kv = NurbsEngine::knots(c);
+            std::vector<std::array<double, 4>> cp(NurbsEngine::control_points_homo(c));
+            const double q[3] = {plane_q[0], plane_q[1], plane_q[2]};
+            const double n[3] = {plane_n[0], plane_n[1], plane_n[2]};
+            const double tol_use = (tol > FT(0)) ? static_cast<double>(tol) : 1e-12;
+            double t_out_d = 0.0;
+            if (!loft_adapter::intersect_curve_plane_arrays(NurbsEngine::degree(c), kv, cp, q, n,
+                                                            static_cast<double>(t_hint), tol_use, &t_out_d))
+                return false;
+            t_out = static_cast<FT>(t_out_d);
+            return true;
         }
 
         static bool extract_supporting_plane(const CurvT& c, FT tol,

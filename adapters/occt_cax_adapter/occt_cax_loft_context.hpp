@@ -23,6 +23,7 @@
 
 #include <loft_adapter_eigen_algebra.hpp>
 #include <loft_adapter_point_projection.hpp>
+#include <loft_adapter_surface_knot_insert.hpp>
 #include <loft_adapter_guide_candidate_selection.hpp>
 #include <loft_adapter_unified_basis.hpp>
 
@@ -475,6 +476,50 @@ struct OcctCaxLoftContext {
                                                u_mults_arr, v_mults_arr, p_u, p_v);
             }
             return surf;
+        }
+
+                // Shared adapter-side Boehm insertion body (operator-sinking
+        // review, Task 2.1) through the OCCT representation: expand the
+        // compressed knot sequences, de-homogenize poles x weights, insert,
+        // and rebuild via the OCCT bridge.
+        static void insert_surface_knots(SurfT& s, int uv_dir, FT t, int mult) {
+            if (mult <= 0 || (uv_dir != 1 && uv_dir != 2)) return;
+            if (s.IsNull()) return;
+            const Geom_BSplineSurface* sf = s.get();
+            const int p_u = sf->UDegree();
+            const int p_v = sf->VDegree();
+            std::vector<double> ku, kv;
+            for (Standard_Integer i = sf->UKnots().Lower(); i <= sf->UKnots().Upper(); ++i)
+                for (Standard_Integer m = 0; m < sf->UMultiplicity(i); ++m)
+                    ku.push_back(sf->UKnot(i));
+            for (Standard_Integer i = sf->VKnots().Lower(); i <= sf->VKnots().Upper(); ++i)
+                for (Standard_Integer m = 0; m < sf->VMultiplicity(i); ++m)
+                    kv.push_back(sf->VKnot(i));
+            const std::size_t n_u = ku.size() - static_cast<std::size_t>(p_u) - 1;
+            const std::size_t n_v = kv.size() - static_cast<std::size_t>(p_v) - 1;
+            std::vector<double> cp(n_u * n_v * 4);
+            for (Standard_Integer j = sf->Poles().LowerCol(); j <= sf->Poles().UpperCol(); ++j)
+                for (Standard_Integer i = sf->Poles().LowerRow(); i <= sf->Poles().UpperRow(); ++i) {
+                    const gp_Pnt& pnt = sf->Pole(i, j);
+                    const double w = sf->Weight(i, j);
+                    const std::size_t ju = static_cast<std::size_t>(i - sf->Poles().LowerRow());
+                    const std::size_t iv = static_cast<std::size_t>(j - sf->Poles().LowerCol());
+                    const std::size_t o = (ju * n_v + iv) * 4;
+                    cp[o + 0] = pnt.X() * w; cp[o + 1] = pnt.Y() * w;
+                    cp[o + 2] = pnt.Z() * w; cp[o + 3] = w;
+                }
+            loft_adapter::insert_surface_knots(ku, kv, cp, p_u, p_v, 4, uv_dir,
+                                               static_cast<double>(t), mult);
+            const std::size_t nn_v = kv.size() - static_cast<std::size_t>(p_v) - 1;
+            const std::size_t nn_u = ku.size() - static_cast<std::size_t>(p_u) - 1;
+            std::vector<Kernel::PtHomo3T> homo(nn_u * nn_v);
+            for (std::size_t i = 0; i < nn_u * nn_v; ++i)
+                for (int w = 0; w < 4; ++w)
+                    homo[i][static_cast<std::size_t>(w)] = cp[i * 4 + static_cast<std::size_t>(w)];
+            s = create_nurbs_surface(p_u, p_v,
+                                     Span<const FT>(ku.data(), ku.size()),
+                                     Span<const FT>(kv.data(), kv.size()),
+                                     Span<const Kernel::PtHomo3T>(homo.data(), homo.size()));
         }
     };
 

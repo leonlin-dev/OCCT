@@ -27,6 +27,7 @@
 #include <loft_adapter_curve_reverse.hpp>
 #include <loft_adapter_curve_topology.hpp>
 #include <loft_adapter_curve_concat.hpp>
+#include <loft_adapter_curve_extremum.hpp>
 #include <loft_adapter_guide_candidate_selection.hpp>
 #include <loft_adapter_unified_basis.hpp>
 
@@ -841,6 +842,24 @@ struct OcctCaxLoftContext {
                                         std::vector<FT> &joints_out) {
             return loft_adapter::concatenate_curves_via<NurbsEngine, GeomEngine>(segments, slot_bounds,
                                                                                  joints_out);
+        }
+
+        // Shared adapter-side extremum oracle (operator-sinking review,
+        // Step 1): the former closest_guide_profile_u screening grid.
+        static bool compute_curve_curve_extremum(const CurvT& c1, const CurvT& c2, FT& t1_out, FT& t2_out,
+                                                 FT& min_dist_out) {
+            const std::vector<FT> kv1 = NurbsEngine::knots(c1);
+            const std::vector<FT> kv2 = NurbsEngine::knots(c2);
+            std::vector<std::array<double, 4>> cp1(NurbsEngine::control_points_homo(c1));
+            std::vector<std::array<double, 4>> cp2(NurbsEngine::control_points_homo(c2));
+            double t1 = 0.0, t2 = 0.0, dmin = 0.0;
+            if (!loft_adapter::curve_curve_min_dist_arrays(NurbsEngine::degree(c1), kv1, cp1,
+                                                           NurbsEngine::degree(c2), kv2, cp2, t1, t2, dmin))
+                return false;
+            t1_out = static_cast<FT>(t1);
+            t2_out = static_cast<FT>(t2);
+            min_dist_out = static_cast<FT>(dmin);
+            return true;
         }
     };
 

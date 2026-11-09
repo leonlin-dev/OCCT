@@ -26,6 +26,7 @@
 #include <loft_adapter_surface_knot_insert.hpp>
 #include <loft_adapter_curve_reverse.hpp>
 #include <loft_adapter_curve_topology.hpp>
+#include <loft_adapter_curve_concat.hpp>
 #include <loft_adapter_guide_candidate_selection.hpp>
 #include <loft_adapter_unified_basis.hpp>
 
@@ -832,6 +833,14 @@ struct OcctCaxLoftContext {
                     out.push_back({s.pb, s.tb});
                 }
             }
+        }
+
+        // Shared adapter-side chain assembly (operator-sinking review,
+        // Task 2.3): the former LoftPrepIntent::merge_profile_chain body.
+        static CurvT concatenate_curves(Span<const CurvT> segments, Span<const FT> slot_bounds,
+                                        std::vector<FT> &joints_out) {
+            return loft_adapter::concatenate_curves_via<NurbsEngine, GeomEngine>(segments, slot_bounds,
+                                                                                 joints_out);
         }
     };
 

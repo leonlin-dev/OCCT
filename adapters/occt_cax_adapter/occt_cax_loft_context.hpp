@@ -22,6 +22,7 @@
 #include <TColStd_Array2OfReal.hxx>
 
 #include <loft_adapter_eigen_algebra.hpp>
+#include <loft_adapter_point_projection.hpp>
 #include <loft_adapter_guide_candidate_selection.hpp>
 #include <loft_adapter_unified_basis.hpp>
 
@@ -527,23 +528,19 @@ struct OcctCaxLoftContext {
             }
         }
 
-        static FT project_point_to_curve(const CurvT& c, const Pt3T& p,
-                                         FT t_hint, FT tol) {
-            const FT lo = c.native->FirstParameter();
-            const FT hi = c.native->LastParameter();
-            FT t = detail::clampd(t_hint, lo, hi);
-            std::array<Vec3T, 2> d{};
-            for (int iter = 0; iter < 100; ++iter) {
-                eval_curve_ders(c, t, 1, Span<Vec3T>(d.data(), 2));
-                const Vec3T diff = Kernel::diff3(d[0], p);
-                const FT f = Kernel::dot3(diff, d[1]);
-                const FT speed = Kernel::dot3(d[1], d[1]);
-                if (speed <= FT(1e-300)) break;
-                const FT step = f / speed;
-                t = detail::clampd(t - step, lo, hi);
-                if (std::fabs(step) <= tol) break;
-            }
-            return t;
+        // Shared adapter-side projection body (operator-sinking review,
+        // Task 1.3): a t_hint inside the domain is a seeded local search,
+        // anything else (incl. NaN) selects the global screening mode.
+        static FT project_point_to_curve(const CurvT& c, const Pt3T& p, FT t_hint, FT tol) {
+            const std::vector<FT> kv = NurbsEngine::knots(c);
+            const FT lo = kv[static_cast<std::size_t>(NurbsEngine::degree(c))];
+            const FT hi = kv.back();
+            const bool has_hint = (t_hint >= lo && t_hint <= hi);
+            const double pt[3] = {p[0], p[1], p[2]};
+            const FT tol_use = (tol > FT(0)) ? tol : FT(1e-12);
+            return static_cast<FT>(loft_adapter::project_point_to_curve_arrays(
+                NurbsEngine::degree(c), kv, NurbsEngine::control_points_homo(c), pt, has_hint,
+                has_hint ? static_cast<double>(t_hint) : 0.0, static_cast<double>(tol_use)));
         }
 
         static bool intersect_curve_plane(const CurvT& c, const Pt3T& plane_q,

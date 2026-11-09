@@ -25,6 +25,7 @@
 #include <loft_adapter_point_projection.hpp>
 #include <loft_adapter_surface_knot_insert.hpp>
 #include <loft_adapter_curve_reverse.hpp>
+#include <loft_adapter_curve_topology.hpp>
 #include <loft_adapter_guide_candidate_selection.hpp>
 #include <loft_adapter_unified_basis.hpp>
 
@@ -407,6 +408,37 @@ struct OcctCaxLoftContext {
         // Task 2.2): the former microkernel copy, hosted by the lab.
         static CurvT reverse_curve(const CurvT& c) {
             return loft_adapter::reverse_curve_via<NurbsEngine, Kernel::PtHomo3T, FT>(c);
+        }
+
+        // Shared adapter-side topology bodies (operator-sinking review,
+        // Task 2.2 remainder), hosted by the algorithm lab.
+        static CurvT clip_curve(const CurvT& c, FT t0, FT t1, FT tol) {
+            if (t0 > t1) return reverse_curve(clip_curve(c, t1, t0, tol));
+            std::vector<double> kv = NurbsEngine::knots(c);
+            std::vector<Kernel::PtHomo3T> cp_h = NurbsEngine::control_points_homo(c);
+            if (kv.size() < 2 * (static_cast<std::size_t>(NurbsEngine::degree(c)) + 1))
+                return c;
+            std::vector<double> kv_out;
+            std::vector<std::array<double, 4>> cp_out;
+            loft_adapter::topo_clip_arrays(NurbsEngine::degree(c), std::move(kv),
+                                           std::move(cp_h), static_cast<double>(t0),
+                                           static_cast<double>(t1), static_cast<double>(tol),
+                                           kv_out, cp_out);
+            std::vector<Kernel::PtHomo3T> homo(cp_out.begin(), cp_out.end());
+            return create_nurbs_curve(NurbsEngine::degree(c),
+                                      Span<const FT>(kv_out.data(), kv_out.size()),
+                                      Span<const Kernel::PtHomo3T>(homo.data(), homo.size()));
+        }
+        static CurvT convert_periodic_to_clamped(int p, Span<const FT> break_knots,
+                                                 Span<const Kernel::PtHomo3T> cp_homo_per) {
+            std::vector<double> kv_out;
+            std::vector<std::array<double, 4>> cp_out;
+            std::vector<std::array<double, 4>> per(cp_homo_per.begin(), cp_homo_per.end());
+            loft_adapter::topo_periodic_to_clamped_arrays(
+                p, std::vector<double>(break_knots.begin(), break_knots.end()), per, kv_out, cp_out);
+            std::vector<Kernel::PtHomo3T> homo(cp_out.begin(), cp_out.end());
+            return create_nurbs_curve(p, Span<const FT>(kv_out.data(), kv_out.size()),
+                                      Span<const Kernel::PtHomo3T>(homo.data(), homo.size()));
         }
 
         static CurvT elevate_degree(const CurvT& c, int target_degree) {

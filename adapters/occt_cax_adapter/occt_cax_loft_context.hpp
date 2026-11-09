@@ -28,6 +28,7 @@
 #include <loft_adapter_curve_topology.hpp>
 #include <loft_adapter_curve_concat.hpp>
 #include <loft_adapter_curve_extremum.hpp>
+#include <loft_adapter_constrained_fit.hpp>
 #include <loft_adapter_curve_plane_isect.hpp>
 #include <loft_adapter_guide_candidate_selection.hpp>
 #include <loft_adapter_unified_basis.hpp>
@@ -798,6 +799,36 @@ struct OcctCaxLoftContext {
             t2_out = static_cast<FT>(t2);
             min_dist_out = static_cast<FT>(dmin);
             return true;
+        }
+
+        // Shared adapter-side constrained-fit body (operator-sinking
+        // review, Step 4): the former per-level saddle solve.
+        static CurvT fit_curve_constrained(int degree, Span<const FT> knots, Span<const FT> sample_params,
+                                          Span<const std::array<FT, 4>> sample_targets, Span<const FT> eq_rows,
+                                          std::size_t num_eq, Span<const std::array<FT, 4>> eq_targets,
+                                          Span<const FT> bending, bool rational) {
+            using AlgT = occt_cax::OcctCaxLoftContext::AlgebraEngine;
+            const std::size_t N = knots.size() - static_cast<std::size_t>(degree) - 1;
+            std::vector<std::array<double, 4>> eq_vec;
+            std::vector<std::array<double, 4>> tgt;
+            (void)eq_vec;
+            (void)tgt;
+            std::vector<double> rows(eq_rows.begin(), eq_rows.end());
+            std::vector<std::vector<double>> eq_rows_v(num_eq);
+            for (std::size_t r = 0; r < num_eq; ++r) {
+                eq_rows_v[r].assign(rows.begin() + static_cast<std::ptrdiff_t>(r * N),
+                                    rows.begin() + static_cast<std::ptrdiff_t>((r + 1) * N));
+            }
+            std::vector<std::array<double, 4>> eq_t(eq_targets.begin(), eq_targets.end());
+            std::vector<double> params(sample_params.begin(), sample_params.end());
+            std::vector<std::array<double, 4>> targets(sample_targets.begin(), sample_targets.end());
+            std::vector<std::array<double, 4>> cp;
+            if (!loft_adapter::fit_curve_constrained_solve<AlgT>(
+                    degree, std::vector<double>(knots.begin(), knots.end()), params, targets, eq_rows_v,
+                    eq_t, std::vector<double>(bending.begin(), bending.end()), rational, cp))
+                throw std::invalid_argument("fit_curve_constrained: assembly failed");
+            std::vector<Kernel::PtHomo3T> homo(cp.begin(), cp.end());
+            return NurbsEngine::create_nurbs_curve(degree, knots, Span<const Kernel::PtHomo3T>(homo.data(), homo.size()));
         }
     };
 

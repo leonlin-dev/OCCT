@@ -24,6 +24,7 @@
 #include <loft_adapter_eigen_algebra.hpp>
 #include <loft_adapter_point_projection.hpp>
 #include <loft_adapter_surface_knot_insert.hpp>
+#include <loft_adapter_curve_reverse.hpp>
 #include <loft_adapter_guide_candidate_selection.hpp>
 #include <loft_adapter_unified_basis.hpp>
 
@@ -400,6 +401,12 @@ struct OcctCaxLoftContext {
                     new_cps[i] = c.cp_homo[ncp - 1 - i];
             }
             return OcctCurve::build(c.degree, new_knots, new_cps);
+        }
+
+        // Shared adapter-side reversal body (operator-sinking review,
+        // Task 2.2): the former microkernel copy, hosted by the lab.
+        static CurvT reverse_curve(const CurvT& c) {
+            return loft_adapter::reverse_curve_via<NurbsEngine, Kernel::PtHomo3T, FT>(c);
         }
 
         static CurvT elevate_degree(const CurvT& c, int target_degree) {
